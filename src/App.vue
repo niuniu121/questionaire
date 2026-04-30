@@ -1,7 +1,8 @@
-<script setup>
-import HelloWorld from './components/HelloWorld.vue'
-</script>
-
 <template>
-  <HelloWorld />
+  <RouterView />
+  <HerbsieBot />
 </template>
+
+<script setup>
+import HerbsieBot from "./components/HerbsieBot.vue";
+</script>
