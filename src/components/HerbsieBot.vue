@@ -44,7 +44,9 @@
 
           <div class="header-text">
             <div class="name">Herbsie</div>
-            <div class="status">Clinic Assistant</div>
+            <div class="status">
+              {{ faqLoading ? "Loading Q&A..." : "Clinic Assistant" }}
+            </div>
           </div>
         </div>
 
@@ -64,6 +66,7 @@
       <div class="options-area">
         <div class="tags-header">
           <span>Quick Q&A</span>
+          <span v-if="faqLoading">Loading...</span>
         </div>
 
         <div class="tags-scroll">
@@ -72,11 +75,18 @@
             :key="item.id"
             class="tag-btn"
             type="button"
-            :disabled="isSubmitting"
+            :disabled="isSubmitting || faqLoading"
             @click="handleSelect(item)"
           >
             {{ item.q }}
           </button>
+
+          <div
+            v-if="!faqLoading && faqDatabase.length === 0"
+            class="empty-tags"
+          >
+            No Q&A content available yet.
+          </div>
         </div>
       </div>
 
@@ -85,14 +95,14 @@
           v-model="userInput"
           type="text"
           placeholder="Type your question..."
-          :disabled="isSubmitting"
+          :disabled="isSubmitting || faqLoading"
           @keyup.enter="handleSend"
         />
 
         <button
           class="send-btn"
           type="button"
-          :disabled="isSubmitting"
+          :disabled="isSubmitting || faqLoading"
           @click="handleSend"
         >
           <span v-if="!isSubmitting">➤</span>
@@ -191,13 +201,20 @@
 
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { addDoc, collection, serverTimestamp } from "firebase/firestore";
+import {
+  addDoc,
+  collection,
+  doc,
+  getDoc,
+  serverTimestamp,
+} from "firebase/firestore";
 import { db } from "../firebase";
 
 const isOpen = ref(false);
 const userInput = ref("");
 const scrollBox = ref(null);
 const isSubmitting = ref(false);
+const faqLoading = ref(false);
 
 const showLeadModal = ref(false);
 const pendingQuestion = ref("");
@@ -235,174 +252,71 @@ const showPromptBubble = ref(true);
 let promptInterval = null;
 let promptAutoShowTimeout = null;
 
-const faqDatabase = ref([
+const fallbackQnas = [
   {
     id: "granulated-herbs",
     q: "What are granulated herbs?",
-    a: `Granulated herbs are concentrated, water-soluble extracts of Traditional Chinese Medicine herbs.<br><br>
-        They are made by boiling raw herbs, then spray-drying the liquid into powder or granules.<br><br>
-        They are convenient because no long boiling is required. You can dissolve them in hot water and drink.`,
-    keywords: [
-      "granulated",
-      "granules",
-      "herbs",
-      "powder",
-      "traditional chinese medicine",
-      "tcm",
-      "decoction",
-      "water soluble",
-    ],
+    a: `Granulated herbs are concentrated, water-soluble extracts of Traditional Chinese Medicine herbs.
+
+They are made by boiling raw herbs, then spray-drying the liquid into powder or granules.
+
+They are convenient because no long boiling is required. You can dissolve them in hot water and drink.`,
   },
   {
     id: "take-granules",
     q: "How do I take granulated herbs?",
-    a: `Measure the prescribed number of flat spoons into a cup.<br><br>
-        Add around 150 ml of hot water. Do not microwave.<br><br>
-        Stir well and drink the mixture. It is okay if some granules do not fully dissolve.<br><br>
-        Take twice daily, around 40 minutes after meals, or choose two times from 10 AM, 4 PM, and 9 PM.<br><br>
-        Do not take them on an empty stomach or within 1 hour before sleep.`,
-    keywords: [
-      "take",
-      "drink",
-      "granules",
-      "granulated",
-      "hot water",
-      "150ml",
-      "150 ml",
-      "spoon",
-      "microwave",
-      "after meals",
-      "empty stomach",
-      "sleep",
-      "10 am",
-      "4 pm",
-      "9 pm",
-    ],
+    a: `Measure the prescribed number of flat spoons into a cup.
+
+Add around 150 ml of hot water. Do not microwave.
+
+Stir well and drink the mixture. It is okay if some granules do not fully dissolve.
+
+Do not take them on an empty stomach or within 1 hour before sleep.`,
   },
   {
     id: "take-pills",
     q: "How do I take herbal pills?",
-    a: `Take the prescribed amount with warm water.<br><br>
-        Timing is similar to granules: twice daily, around 40 minutes after meals, or choose two times from 10 AM, 4 PM, and 9 PM.<br><br>
-        Avoid taking herbal pills when hungry or within 1 hour before sleep.`,
-    keywords: [
-      "pills",
-      "pill",
-      "tablet",
-      "tablets",
-      "warm water",
-      "hungry",
-      "empty stomach",
-      "sleep",
-      "after meals",
-    ],
+    a: `Take the prescribed amount with warm water.
+
+Timing is similar to granules: twice daily, around 40 minutes after meals, or choose two times from 10 AM, 4 PM, and 9 PM.
+
+Avoid taking herbal pills when hungry or within 1 hour before sleep.`,
   },
   {
     id: "side-effects",
     q: "What if I experience side effects?",
-    a: `Some people may experience temporary worsening of symptoms, mild allergic reactions, stomach discomfort, cramping, loose stools, or nausea.<br><br>
-        Rare but possible effects include interactions with medications, or effects on blood pressure, liver, kidney function, bleeding, clotting, or hormones.<br><br>
-        If symptoms are unexpected or severe, stop taking the herbs and seek medical advice.`,
-    keywords: [
-      "side effects",
-      "side effect",
-      "nausea",
-      "loose stools",
-      "diarrhea",
-      "allergy",
-      "allergic",
-      "stomach",
-      "cramp",
-      "cramping",
-      "blood pressure",
-      "liver",
-      "kidney",
-      "bleeding",
-      "clotting",
-      "hormones",
-      "medication",
-    ],
-  },
-  {
-    id: "food-guidance",
-    q: "What should I eat while taking herbs?",
-    a: `Eat warm, light, simple, and moderate meals.<br><br>
-        Warm: avoid cold food and drinks.<br>
-        Light: reduce salty, spicy, sweet, and sour foods.<br>
-        Simple: choose one main dish with one to two sides.<br>
-        Moderate: eat until around 70% full.<br><br>
-        Focus on grains, vegetables, and minimal meat.`,
-    keywords: [
-      "eat",
-      "food",
-      "diet",
-      "warm",
-      "cold food",
-      "cold drink",
-      "spicy",
-      "sweet",
-      "salty",
-      "sour",
-      "vegetables",
-      "grains",
-      "meat",
-      "70",
-    ],
+    a: `Some people may experience temporary worsening of symptoms, mild allergic reactions, stomach discomfort, cramping, loose stools, or nausea.
+
+If symptoms are unexpected or severe, stop taking the herbs and seek medical advice.`,
   },
   {
     id: "foods-to-avoid",
     q: "What foods should I avoid while taking herbs?",
-    a: `It is usually best to avoid raw or cold foods, fried foods, spicy foods, alcohol, seafood, lamb, and certain hot-natured fruits such as durian, mango, lychee, pineapple, and apricots.<br><br>
-        Depending on your condition, your practitioner may give more specific food restrictions.`,
-    keywords: [
-      "avoid",
-      "cold",
-      "raw",
-      "fried",
-      "spicy",
-      "alcohol",
-      "seafood",
-      "shrimp",
-      "crab",
-      "shellfish",
-      "lamb",
-      "beef",
-      "durian",
-      "mango",
-      "lychee",
-      "pineapple",
-      "apricots",
-      "pickles",
-      "persimmon",
-      "chili",
-    ],
+    a: `It is usually best to avoid raw or cold foods, fried foods, spicy foods, alcohol, seafood, lamb, and certain hot-natured fruits such as durian, mango, lychee, pineapple, and apricots.
+
+Depending on your condition, your practitioner may give more specific food restrictions.`,
   },
   {
     id: "sleep-lifestyle",
     q: "How should I manage sleep and lifestyle?",
-    a: `Aim for at least 8 hours of sleep.<br><br>
-        A helpful routine is sleeping by 10 PM and waking by 6 AM.<br><br>
-        Balance work and rest, avoid overworking, keep warm after sweating, avoid smoking, and try to stay calm and relaxed.`,
-    keywords: [
-      "sleep",
-      "lifestyle",
-      "rest",
-      "work",
-      "stress",
-      "smoking",
-      "smoke",
-      "mood",
-      "sweating",
-      "10 pm",
-      "6 am",
-      "8 hours",
-    ],
+    a: `Aim for at least 8 hours of sleep.
+
+A helpful routine is sleeping by 10 PM and waking by 6 AM.
+
+Balance work and rest, avoid overworking, keep warm after sweating, avoid smoking, and try to stay calm and relaxed.`,
   },
-]);
+];
+
+const faqDatabase = ref([]);
 
 function openChat() {
   isOpen.value = true;
   showPromptBubble.value = false;
+
+  if (!faqDatabase.value.length && !faqLoading.value) {
+    fetchQnasFromFirestore();
+  }
+
   scrollToBottom();
 }
 
@@ -456,6 +370,135 @@ function resetPromptAutoShow() {
   }, 1200);
 }
 
+async function fetchQnasFromFirestore() {
+  faqLoading.value = true;
+
+  try {
+    const chatbotDocRef = doc(db, "siteContent", "chatbotQNA");
+    const chatbotDocSnap = await getDoc(chatbotDocRef);
+
+    if (chatbotDocSnap.exists()) {
+      const data = chatbotDocSnap.data();
+
+      const quickQuestions = Array.isArray(data.quickQuestions)
+        ? data.quickQuestions
+        : [];
+      const items = Array.isArray(data.items) ? data.items : [];
+
+      const sourceItems = quickQuestions.length ? quickQuestions : items;
+
+      if (sourceItems.length) {
+        faqDatabase.value = normalizeQnaItems(sourceItems);
+        return;
+      }
+    }
+
+    const qnaPageDocRef = doc(db, "siteContent", "qnaPage");
+    const qnaPageDocSnap = await getDoc(qnaPageDocRef);
+
+    if (qnaPageDocSnap.exists()) {
+      const data = qnaPageDocSnap.data();
+      const qnaItems = extractQnasFromQnaPage(data);
+
+      if (qnaItems.length) {
+        faqDatabase.value = normalizeQnaItems(qnaItems);
+        return;
+      }
+    }
+
+    faqDatabase.value = normalizeQnaItems(fallbackQnas);
+  } catch (error) {
+    console.error("Failed to load Herbsie QNA:", error);
+    faqDatabase.value = normalizeQnaItems(fallbackQnas);
+  } finally {
+    faqLoading.value = false;
+  }
+}
+
+function extractQnasFromQnaPage(data) {
+  if (Array.isArray(data.sections) && data.sections.length) {
+    return data.sections
+      .filter((section) => section.visible !== false && section.type === "qna")
+      .flatMap((section) => (Array.isArray(section.items) ? section.items : []))
+      .filter((item) => item.visible !== false);
+  }
+
+  if (Array.isArray(data.qnaItems)) {
+    return data.qnaItems.filter((item) => item.visible !== false);
+  }
+
+  return [];
+}
+
+function normalizeQnaItems(items) {
+  return items
+    .map((item, index) => {
+      const question = item.question || item.q || "";
+      const rawAnswer = item.answer || item.a || "";
+      const plainAnswer = answerToPlainText(rawAnswer);
+
+      return {
+        id: item.id || `qna_${index}`,
+        q: question,
+        a: formatAnswerForHtml(plainAnswer),
+        plainAnswer,
+        keywords: buildKeywords(question, plainAnswer),
+      };
+    })
+    .filter((item) => item.q.trim() && item.plainAnswer.trim());
+}
+
+function answerToPlainText(answer) {
+  if (typeof answer === "string") {
+    return answer;
+  }
+
+  if (!Array.isArray(answer)) {
+    return "";
+  }
+
+  return answer
+    .map((block) => {
+      if (!block) return "";
+
+      if (block.type === "paragraph" || block.type === "subheading") {
+        return block.text || "";
+      }
+
+      if (block.type === "list" && Array.isArray(block.items)) {
+        return block.items.map((item) => `• ${item}`).join("\n");
+      }
+
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function formatAnswerForHtml(answer) {
+  const safe = escapeHtml(answer);
+
+  return safe
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("<br>")
+    .replaceAll("<br><br><br>", "<br><br>");
+}
+
+function buildKeywords(question, answer) {
+  const combined = `${question} ${answer}`.toLowerCase();
+
+  const words = combined
+    .replace(/[^\w\s]/g, " ")
+    .split(/\s+/)
+    .map((word) => word.trim())
+    .filter(Boolean)
+    .filter((word) => word.length >= 3);
+
+  return [...new Set(words)].slice(0, 40);
+}
+
 function normalize(text) {
   return String(text || "")
     .trim()
@@ -478,10 +521,14 @@ function findFaqMatch(rawText) {
   for (const item of faqDatabase.value) {
     let score = 0;
     const questionText = normalize(item.q);
-    const answerText = normalize(item.a);
+    const answerText = normalize(item.plainAnswer || item.a);
 
     if (questionText && text.includes(questionText)) {
       score += 10;
+    }
+
+    if (text && questionText.includes(text)) {
+      score += 5;
     }
 
     for (const keyword of item.keywords || []) {
@@ -541,6 +588,10 @@ async function handleSend() {
   const raw = userInput.value.trim();
   if (!raw || isSubmitting.value) return;
 
+  if (!faqDatabase.value.length && !faqLoading.value) {
+    await fetchQnasFromFirestore();
+  }
+
   pushUserMessage(raw);
   userInput.value = "";
 
@@ -554,8 +605,7 @@ async function handleSend() {
       resetLeadForm();
 
       pushBotMessage(
-        `I couldn't find a close match for that question.<br><br>
-         Please leave your details in the form and our team will contact you directly.`,
+        `I couldn't find a close match for that question.<br><br>Please leave your details in the form and our team will contact you directly.`,
       );
 
       showLeadModal.value = true;
@@ -628,8 +678,7 @@ async function submitLead() {
     showLeadModal.value = false;
 
     pushBotMessage(
-      `Thank you — your enquiry has been sent successfully.<br><br>
-       Our team will contact you soon via email or phone.`,
+      `Thank you — your enquiry has been sent successfully.<br><br>Our team will contact you soon via email or phone.`,
     );
 
     pendingQuestion.value = "";
@@ -639,8 +688,7 @@ async function submitLead() {
     console.error("Failed to save lead:", error);
 
     pushBotMessage(
-      `Sorry, something went wrong while sending your enquiry.<br><br>
-       Please try again, or contact us directly.`,
+      `Sorry, something went wrong while sending your enquiry.<br><br>Please try again, or contact us directly.`,
     );
 
     await scrollToBottom();
@@ -658,7 +706,7 @@ function isValidPhone(value) {
 }
 
 function escapeHtml(value) {
-  return String(value)
+  return String(value || "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
@@ -676,6 +724,7 @@ async function scrollToBottom() {
 
 onMounted(() => {
   startPromptRotation();
+  fetchQnasFromFirestore();
 });
 
 onBeforeUnmount(() => {
@@ -1012,6 +1061,13 @@ onBeforeUnmount(() => {
   cursor: not-allowed;
 }
 
+.empty-tags {
+  color: #789083;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 8px 2px;
+}
+
 .input-area {
   padding: 12px 15px;
   border-top: 1px solid #eee;
@@ -1021,12 +1077,12 @@ onBeforeUnmount(() => {
 
 .input-area input {
   flex: 1;
-  border: 1px solid #e0e5e4;
+  border: 1px solid #ddd;
   border-radius: 20px;
-  padding: 8px 15px;
+  padding: 9px 14px;
   outline: none;
   font-size: 14px;
-  transition: border-color 0.2s;
+  color: #325b49;
 }
 
 .input-area input:focus {
@@ -1034,47 +1090,45 @@ onBeforeUnmount(() => {
 }
 
 .input-area input:disabled {
-  background: #f5f5f5;
+  background: #f4f4f4;
   cursor: not-allowed;
 }
 
 .send-btn {
-  background: #325b49;
+  width: 38px;
+  height: 38px;
+  margin-left: 8px;
+  border-radius: 50%;
   border: none;
+  background: #325b49;
   color: white;
   cursor: pointer;
-  margin-left: 10px;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  font-size: 14px;
 }
 
 .send-btn:disabled {
-  opacity: 0.7;
+  opacity: 0.65;
   cursor: not-allowed;
 }
 
 .lead-modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(19, 31, 25, 0.34);
-  backdrop-filter: blur(4px);
+  background: rgba(22, 35, 28, 0.32);
+  backdrop-filter: blur(6px);
+  z-index: 3000;
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1100;
   padding: 20px;
 }
 
 .lead-modal {
-  width: min(420px, 100%);
-  background: #fff;
-  border-radius: 24px;
-  box-shadow: 0 20px 60px rgba(20, 39, 31, 0.22);
-  overflow: hidden;
+  width: min(440px, 100%);
+  background: rgba(255, 255, 255, 0.96);
+  border-radius: 26px;
+  padding: 24px;
+  box-shadow: 0 26px 70px rgba(25, 55, 40, 0.2);
   border: 1px solid rgba(50, 91, 73, 0.08);
 }
 
@@ -1083,62 +1137,58 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   align-items: flex-start;
   gap: 16px;
-  padding: 22px 22px 12px;
+  margin-bottom: 12px;
 }
 
 .lead-kicker {
-  margin: 0 0 6px;
-  color: #7a8f83;
+  margin: 0 0 5px;
+  color: #6c8977;
   font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-weight: 800;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
-.lead-modal-header h3 {
+.lead-modal h3 {
   margin: 0;
-  color: #244436;
-  font-size: 26px;
-  line-height: 1.1;
+  color: #2f5b43;
+  font-size: 24px;
 }
 
 .lead-close-btn {
+  width: 34px;
+  height: 34px;
   border: none;
-  background: #f3f6f4;
-  color: #325b49;
-  width: 36px;
-  height: 36px;
   border-radius: 50%;
-  font-size: 24px;
-  line-height: 1;
+  background: #edf1ed;
+  color: #325b49;
   cursor: pointer;
-  flex-shrink: 0;
+  font-size: 20px;
 }
 
 .lead-desc {
-  margin: 0;
-  padding: 0 22px 16px;
-  color: #617368;
+  margin: 0 0 16px;
+  color: #64796c;
   font-size: 14px;
   line-height: 1.6;
 }
 
 .lead-question-box {
-  margin: 0 22px 18px;
-  padding: 14px 16px;
-  border-radius: 16px;
-  background: #f7faf8;
-  border: 1px solid #e4ece7;
+  border-radius: 18px;
+  background: #f5f8f5;
+  border: 1px solid rgba(50, 91, 73, 0.08);
+  padding: 12px 14px;
+  margin-bottom: 16px;
 }
 
 .lead-question-label {
-  display: inline-block;
-  margin-bottom: 6px;
-  font-size: 11px;
-  font-weight: 700;
-  color: #7a8f83;
-  letter-spacing: 0.06em;
+  display: block;
+  color: #6d8276;
+  font-size: 12px;
+  font-weight: 800;
+  margin-bottom: 5px;
   text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .lead-question-box p {
@@ -1146,147 +1196,105 @@ onBeforeUnmount(() => {
   color: #325b49;
   font-size: 14px;
   line-height: 1.5;
-  word-break: break-word;
 }
 
 .lead-form {
-  padding: 0 22px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
 }
 
 .lead-field {
-  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .lead-field label {
-  display: block;
-  margin-bottom: 6px;
-  color: #274639;
+  color: #325b49;
   font-size: 13px;
   font-weight: 700;
 }
 
 .lead-field input {
-  width: 100%;
-  box-sizing: border-box;
-  border: 1px solid #d9e3dd;
+  border: 1px solid #d6e0d9;
   border-radius: 14px;
-  padding: 12px 14px;
+  padding: 11px 13px;
+  color: #325b49;
   font-size: 14px;
   outline: none;
-  transition:
-    border-color 0.2s,
-    box-shadow 0.2s;
 }
 
 .lead-field input:focus {
   border-color: #325b49;
-  box-shadow: 0 0 0 4px rgba(50, 91, 73, 0.08);
-}
-
-.lead-field input:disabled {
-  background: #f5f5f5;
-  cursor: not-allowed;
+  box-shadow: 0 0 0 3px rgba(50, 91, 73, 0.08);
 }
 
 .field-error {
-  display: inline-block;
-  margin-top: 6px;
-  color: #c05252;
+  color: #c35f77;
   font-size: 12px;
 }
 
 .lead-actions {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 18px;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
 }
 
 .back-btn,
 .submit-btn {
-  flex: 1;
-  height: 46px;
-  border-radius: 14px;
+  border: none;
+  border-radius: 999px;
+  padding: 11px 18px;
   font-size: 14px;
   font-weight: 700;
   cursor: pointer;
-  transition:
-    transform 0.2s,
-    opacity 0.2s,
-    background 0.2s,
-    color 0.2s;
 }
 
 .back-btn {
-  border: 1px solid #d6e0da;
-  background: #fff;
+  background: #edf1ed;
   color: #325b49;
 }
 
 .submit-btn {
-  border: none;
   background: #325b49;
-  color: #fff;
-}
-
-.back-btn:hover,
-.submit-btn:hover {
-  transform: translateY(-1px);
+  color: white;
 }
 
 .back-btn:disabled,
 .submit-btn:disabled {
-  opacity: 0.7;
+  opacity: 0.65;
   cursor: not-allowed;
-  transform: none;
 }
 
 .prompt-fade-enter-active,
 .prompt-fade-leave-active {
   transition:
-    opacity 0.35s ease,
-    transform 0.35s ease;
+    opacity 0.25s ease,
+    transform 0.25s ease;
 }
 
 .prompt-fade-enter-from,
 .prompt-fade-leave-to {
   opacity: 0;
-  transform: translateY(10px);
+  transform: translateY(8px);
 }
 
-@media (max-width: 480px) {
+@media (max-width: 600px) {
   .herbsie-container {
-    bottom: 16px;
-    right: 16px;
-  }
-
-  .floating-prompt {
-    right: 0;
-    bottom: 82px;
-    min-width: 220px;
-    max-width: min(280px, calc(100vw - 32px));
-    padding: 14px 42px 14px 18px;
-  }
-
-  .prompt-text {
-    font-size: 14px;
+    right: 14px;
+    bottom: 14px;
   }
 
   .chat-window {
-    width: calc(100vw - 24px);
-    height: min(550px, calc(100vh - 32px));
+    width: calc(100vw - 28px);
+    height: min(560px, calc(100vh - 40px));
   }
 
-  .lead-modal {
-    border-radius: 20px;
-  }
-
-  .lead-modal-header h3 {
-    font-size: 22px;
-  }
-
-  .lead-actions {
-    flex-direction: column;
+  .floating-prompt {
+    min-width: 220px;
+    max-width: 260px;
   }
 }
 </style>

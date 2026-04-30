@@ -7,12 +7,10 @@
         data-bggradient="linear-gradient(180deg, #dfe7dc 0%, #e7efe4 52%, #eef4ec 100%)"
       >
         <div class="container">
-          <p class="eyebrow">Herbal Medicine Guide</p>
-          <h1 class="hero-title">Questions & Answers</h1>
+          <p class="eyebrow">{{ pageContent.hero.eyebrow }}</p>
+          <h1 class="hero-title">{{ pageContent.hero.title }}</h1>
           <p class="hero-subtitle">
-            Practical guidance on how to take granulated herbs and herbal pills,
-            what to avoid, and how to support your treatment through food, rest,
-            and daily habits.
+            {{ pageContent.hero.subtitle }}
           </p>
         </div>
       </section>
@@ -52,19 +50,32 @@
               </div>
 
               <div>
-                <h2>Before You Start</h2>
+                <h2>{{ pageContent.beforeStart.title }}</h2>
                 <p>
-                  Please follow your practitioner’s instructions. If you feel
-                  unwell, stop taking the herbs and seek medical advice when
-                  needed.
+                  {{ pageContent.beforeStart.description }}
                 </p>
               </div>
             </div>
 
-            <div class="qna-list">
+            <div v-if="loading" class="qna-state-card">
+              Loading questions and answers...
+            </div>
+
+            <div v-else-if="errorMessage" class="qna-state-card error">
+              {{ errorMessage }}
+            </div>
+
+            <div
+              v-else-if="pageContent.qnaItems.length === 0"
+              class="qna-state-card"
+            >
+              QNA content will be available soon.
+            </div>
+
+            <div v-else class="qna-list">
               <article
-                v-for="(item, index) in qnaItems"
-                :key="item.question"
+                v-for="(item, index) in pageContent.qnaItems"
+                :key="item.id || item.question || index"
                 class="qna-item"
                 :class="{ open: openIndex === index }"
               >
@@ -98,7 +109,9 @@
                 <transition name="qna-expand">
                   <div v-if="openIndex === index" class="qna-answer">
                     <template
-                      v-for="(block, blockIndex) in item.answer"
+                      v-for="(block, blockIndex) in normaliseAnswerBlocks(
+                        item.answer,
+                      )"
                       :key="blockIndex"
                     >
                       <p v-if="block.type === 'paragraph'">
@@ -166,18 +179,24 @@
               </div>
 
               <div>
-                <h2>Foods to Avoid While Taking Herbs</h2>
+                <h2>{{ pageContent.foodSection.title }}</h2>
                 <p>
-                  These foods may be unsuitable during herbal treatment
-                  depending on your condition and prescription.
+                  {{ pageContent.foodSection.description }}
                 </p>
               </div>
             </div>
 
-            <div class="food-grid">
+            <div
+              v-if="pageContent.avoidGroups.length === 0"
+              class="qna-state-card"
+            >
+              Food guidance will be available soon.
+            </div>
+
+            <div v-else class="food-grid">
               <article
-                v-for="group in avoidGroups"
-                :key="group.title"
+                v-for="group in pageContent.avoidGroups"
+                :key="group.id || group.title"
                 class="food-card"
               >
                 <h3>{{ group.title }}</h3>
@@ -220,28 +239,29 @@
               </div>
 
               <div>
-                <h2>Rest, Lifestyle & Emotional Wellbeing</h2>
+                <h2>{{ pageContent.lifestyleSection.title }}</h2>
                 <p>
-                  Herbal treatment works best when supported by steady routines,
-                  adequate rest, and calm daily habits.
+                  {{ pageContent.lifestyleSection.description }}
                 </p>
               </div>
             </div>
 
-            <div class="lifestyle-grid">
-              <article class="lifestyle-card">
-                <h3>Rest & Lifestyle</h3>
-                <p>
-                  Balance work and rest, avoid overworking, keep warm after
-                  sweating, and avoid smoking.
-                </p>
-              </article>
+            <div
+              v-if="pageContent.lifestyleCards.length === 0"
+              class="qna-state-card"
+            >
+              Lifestyle guidance will be available soon.
+            </div>
 
-              <article class="lifestyle-card">
-                <h3>Emotional Wellbeing</h3>
+            <div v-else class="lifestyle-grid">
+              <article
+                v-for="card in pageContent.lifestyleCards"
+                :key="card.id || card.title"
+                class="lifestyle-card"
+              >
+                <h3>{{ card.title }}</h3>
                 <p>
-                  Maintain a positive mood, stay calm and relaxed, and avoid
-                  anger and stress where possible.
+                  {{ card.description }}
                 </p>
               </article>
             </div>
@@ -261,255 +281,455 @@
 <script setup>
 import { ref, onMounted, onUnmounted, nextTick } from "vue";
 import { onBeforeRouteLeave } from "vue-router";
+import { doc, getDoc } from "firebase/firestore";
+import { db } from "../firebase";
 
 const openIndex = ref(-1);
+const loading = ref(true);
+const errorMessage = ref("");
+
 const currentBgGradient = ref(
   "linear-gradient(180deg, #dfe7dc 0%, #e7efe4 52%, #eef4ec 100%)",
 );
-const sectionRefs = ref([]);
 
+const sectionRefs = ref([]);
 let observer = null;
 
-const qnaItems = [
-  {
-    question: "What are granulated herbs?",
-    answer: [
-      {
-        type: "paragraph",
-        text: "Granulated herbs are concentrated, water-soluble extracts of Traditional Chinese Medicine (TCM) herbs.",
-      },
-      {
-        type: "subheading",
-        text: "They are made by:",
-      },
-      {
-        type: "list",
-        items: [
-          "Boiling raw herbs into a decoction",
-          "Spray-drying the liquid into powder or granules",
-          "Often including a small amount of starch as a carrier",
-        ],
-      },
-      {
-        type: "subheading",
-        text: "Why use them?",
-      },
-      {
-        type: "list",
-        items: [
-          "Convenient alternative to traditional herbal teas",
-          "No long boiling required",
-          "Simply dissolve in hot water and drink",
-        ],
-      },
-    ],
+const defaultPageContent = {
+  hero: {
+    eyebrow: "Herbal Medicine Guide",
+    title: "Questions & Answers",
+    subtitle:
+      "Practical guidance on how to take granulated herbs and herbal pills, what to avoid, and how to support your treatment through food, rest, and daily habits.",
   },
-  {
-    question: "How do I take granulated herbs?",
-    answer: [
-      {
-        type: "list",
-        items: [
-          "Measure the prescribed number of flat spoons into a cup.",
-          "Add around 150 ml of hot water. Do not microwave.",
-          "Stir well and drink the mixture.",
-          "It is okay if some granules do not fully dissolve.",
-        ],
-      },
-      {
-        type: "subheading",
-        text: "When to take:",
-      },
-      {
-        type: "list",
-        items: [
-          "Option 1: Take twice daily, 40 minutes after meals.",
-          "Option 2: Choose any two times: 10 AM, 4 PM, or 9 PM.",
-        ],
-      },
-      {
-        type: "subheading",
-        text: "Important:",
-      },
-      {
-        type: "list",
-        items: [
-          "Do not take on an empty stomach.",
-          "Do not take within 1 hour before sleep.",
-        ],
-      },
-    ],
-  },
-  {
-    question: "How do I take herbal pills?",
-    answer: [
-      {
-        type: "paragraph",
-        text: "Take the prescribed amount with warm water.",
-      },
-      {
-        type: "subheading",
-        text: "Timing options:",
-      },
-      {
-        type: "list",
-        items: [
-          "Option 1: Twice daily, 40 minutes after meals.",
-          "Option 2: Choose two times from 10 AM, 4 PM, or 9 PM.",
-        ],
-      },
-      {
-        type: "subheading",
-        text: "Important:",
-      },
-      {
-        type: "list",
-        items: [
-          "Avoid taking herbal pills when hungry.",
-          "Avoid taking herbal pills within 1 hour before sleep.",
-        ],
-      },
-    ],
-  },
-  {
-    question: "What if I experience side effects?",
-    answer: [
-      {
-        type: "subheading",
-        text: "Some people may experience:",
-      },
-      {
-        type: "list",
-        items: [
-          "Temporary worsening of symptoms",
-          "Mild allergic reactions",
-          "Stomach discomfort or cramping",
-          "Loose stools",
-          "Nausea",
-        ],
-      },
-      {
-        type: "subheading",
-        text: "Rare but possible:",
-      },
-      {
-        type: "list",
-        items: [
-          "Interaction with medications",
-          "Effects on blood pressure, liver, or kidney function",
-          "Changes in bleeding, clotting, or hormones",
-        ],
-      },
-      {
-        type: "subheading",
-        text: "What to do:",
-      },
-      {
-        type: "list",
-        items: [
-          "Stop taking the herbs.",
-          "Seek medical advice if symptoms are unexpected or severe.",
-        ],
-      },
-    ],
-  },
-  {
-    question: "What should I be aware of while taking herbs?",
-    answer: [
-      {
-        type: "subheading",
-        text: "Healthy eating:",
-      },
-      {
-        type: "list",
-        items: [
-          "Eat warm, light, simple, and moderate meals.",
-          "Warm: avoid cold food and drinks.",
-          "Light: reduce salty, spicy, sweet, and sour foods.",
-          "Simple: choose one main dish with one to two sides.",
-          "Moderate: eat until around 70% full.",
-        ],
-      },
-      {
-        type: "subheading",
-        text: "Focus on:",
-      },
-      {
-        type: "list",
-        items: ["Grains", "Vegetables", "Minimal meat"],
-      },
-    ],
-  },
-  {
-    question: "How should I manage sleep and lifestyle?",
-    answer: [
-      {
-        type: "subheading",
-        text: "Sleep well:",
-      },
-      {
-        type: "list",
-        items: [
-          "Aim for at least 8 hours of sleep.",
-          "The recommended routine is to sleep by 10 PM and wake by 6 AM.",
-        ],
-      },
-    ],
-  },
-];
 
-const avoidGroups = [
-  {
-    title: "Raw or cold foods (general category)",
-    items: [
-      "Raw or cold foods",
-      "Fermented glutinous rice",
-      "Pickles",
-      "Persimmon",
-    ],
+  beforeStart: {
+    title: "Before You Start",
+    description:
+      "Please follow your practitioner’s instructions. If you feel unwell, stop taking the herbs and seek medical advice when needed.",
   },
-  {
-    title: "Fried & Spicy",
-    items: ["Fried foods", "Spicy foods", "Chili"],
+
+  qnaItems: [
+    {
+      id: "qna_granulated_herbs",
+      question: "What are granulated herbs?",
+      visible: true,
+      answer: [
+        {
+          type: "paragraph",
+          text: "Granulated herbs are concentrated, water-soluble extracts of Traditional Chinese Medicine (TCM) herbs.",
+        },
+        {
+          type: "subheading",
+          text: "They are made by:",
+        },
+        {
+          type: "list",
+          items: [
+            "Boiling raw herbs into a decoction",
+            "Spray-drying the liquid into powder or granules",
+            "Often including a small amount of starch as a carrier",
+          ],
+        },
+        {
+          type: "subheading",
+          text: "Why use them?",
+        },
+        {
+          type: "list",
+          items: [
+            "Convenient alternative to traditional herbal teas",
+            "No long boiling required",
+            "Simply dissolve in hot water and drink",
+          ],
+        },
+      ],
+    },
+    {
+      id: "qna_take_granulated_herbs",
+      question: "How do I take granulated herbs?",
+      visible: true,
+      answer: [
+        {
+          type: "list",
+          items: [
+            "Measure the prescribed number of flat spoons into a cup.",
+            "Add around 150 ml of hot water. Do not microwave.",
+            "Stir well and drink the mixture.",
+            "It is okay if some granules do not fully dissolve.",
+          ],
+        },
+        {
+          type: "subheading",
+          text: "When to take:",
+        },
+        {
+          type: "list",
+          items: [
+            "Option 1: Take twice daily, 40 minutes after meals.",
+            "Option 2: Choose any two times: 10 AM, 4 PM, or 9 PM.",
+          ],
+        },
+        {
+          type: "subheading",
+          text: "Important:",
+        },
+        {
+          type: "list",
+          items: [
+            "Do not take on an empty stomach.",
+            "Do not take within 1 hour before sleep.",
+          ],
+        },
+      ],
+    },
+    {
+      id: "qna_herbal_pills",
+      question: "How do I take herbal pills?",
+      visible: true,
+      answer: [
+        {
+          type: "paragraph",
+          text: "Take the prescribed amount with warm water.",
+        },
+        {
+          type: "subheading",
+          text: "Timing options:",
+        },
+        {
+          type: "list",
+          items: [
+            "Option 1: Twice daily, 40 minutes after meals.",
+            "Option 2: Choose two times from 10 AM, 4 PM, or 9 PM.",
+          ],
+        },
+        {
+          type: "subheading",
+          text: "Important:",
+        },
+        {
+          type: "list",
+          items: [
+            "Avoid taking herbal pills when hungry.",
+            "Avoid taking herbal pills within 1 hour before sleep.",
+          ],
+        },
+      ],
+    },
+    {
+      id: "qna_side_effects",
+      question: "What if I experience side effects?",
+      visible: true,
+      answer: [
+        {
+          type: "subheading",
+          text: "Some people may experience:",
+        },
+        {
+          type: "list",
+          items: [
+            "Temporary worsening of symptoms",
+            "Mild allergic reactions",
+            "Stomach discomfort or cramping",
+            "Loose stools",
+            "Nausea",
+          ],
+        },
+        {
+          type: "subheading",
+          text: "Rare but possible:",
+        },
+        {
+          type: "list",
+          items: [
+            "Interaction with medications",
+            "Effects on blood pressure, liver, or kidney function",
+            "Changes in bleeding, clotting, or hormones",
+          ],
+        },
+        {
+          type: "subheading",
+          text: "What to do:",
+        },
+        {
+          type: "list",
+          items: [
+            "Stop taking the herbs.",
+            "Seek medical advice if symptoms are unexpected or severe.",
+          ],
+        },
+      ],
+    },
+    {
+      id: "qna_awareness",
+      question: "What should I be aware of while taking herbs?",
+      visible: true,
+      answer: [
+        {
+          type: "subheading",
+          text: "Healthy eating:",
+        },
+        {
+          type: "list",
+          items: [
+            "Eat warm, light, simple, and moderate meals.",
+            "Warm: avoid cold food and drinks.",
+            "Light: reduce salty, spicy, sweet, and sour foods.",
+            "Simple: choose one main dish with one to two sides.",
+            "Moderate: eat until around 70% full.",
+          ],
+        },
+        {
+          type: "subheading",
+          text: "Focus on:",
+        },
+        {
+          type: "list",
+          items: ["Grains", "Vegetables", "Minimal meat"],
+        },
+      ],
+    },
+    {
+      id: "qna_sleep_lifestyle",
+      question: "How should I manage sleep and lifestyle?",
+      visible: true,
+      answer: [
+        {
+          type: "subheading",
+          text: "Sleep well:",
+        },
+        {
+          type: "list",
+          items: [
+            "Aim for at least 8 hours of sleep.",
+            "The recommended routine is to sleep by 10 PM and wake by 6 AM.",
+          ],
+        },
+      ],
+    },
+  ],
+
+  foodSection: {
+    title: "Foods to Avoid While Taking Herbs",
+    description:
+      "These foods may be unsuitable during herbal treatment depending on your condition and prescription.",
   },
-  {
-    title: "Poultry",
-    items: ["Chicken head", "Goose meat"],
+
+  avoidGroups: [
+    {
+      id: "avoid_raw_cold",
+      title: "Raw or cold foods (general category)",
+      visible: true,
+      items: [
+        "Raw or cold foods",
+        "Fermented glutinous rice",
+        "Pickles",
+        "Persimmon",
+      ],
+    },
+    {
+      id: "avoid_fried_spicy",
+      title: "Fried & Spicy",
+      visible: true,
+      items: ["Fried foods", "Spicy foods", "Chili"],
+    },
+    {
+      id: "avoid_poultry",
+      title: "Poultry",
+      visible: true,
+      items: ["Chicken head", "Goose meat"],
+    },
+    {
+      id: "avoid_seafood",
+      title: "Seafood",
+      visible: true,
+      items: [
+        "Shrimp",
+        "Crab",
+        "Hairtail",
+        "Yellow croaker",
+        "Pomfret",
+        "Shellfish",
+      ],
+    },
+    {
+      id: "avoid_red_meats",
+      title: "Red Meats & Exotic Meats",
+      visible: true,
+      items: ["Lamb", "Beef, especially for skin conditions", "Pig head meat"],
+    },
+    {
+      id: "avoid_vegetables_herbs",
+      title: "Certain Vegetables & Herbs",
+      visible: true,
+      items: [
+        "Taro",
+        "Chinese chives",
+        "Mustard greens",
+        "Bamboo shoots",
+        "Eggplant",
+      ],
+    },
+    {
+      id: "avoid_fruits",
+      title: "Tropical & Hot-Natured Fruits",
+      visible: true,
+      items: ["Apricots", "Durian", "Pineapple", "Mango", "Bayberry", "Lychee"],
+    },
+    {
+      id: "avoid_alcohol",
+      title: "Alcohol",
+      visible: true,
+      items: ["Alcoholic drinks"],
+    },
+  ],
+
+  lifestyleSection: {
+    title: "Rest, Lifestyle & Emotional Wellbeing",
+    description:
+      "Herbal treatment works best when supported by steady routines, adequate rest, and calm daily habits.",
   },
-  {
-    title: "Seafood",
-    items: [
-      "Shrimp",
-      "Crab",
-      "Hairtail",
-      "Yellow croaker",
-      "Pomfret",
-      "Shellfish",
-    ],
-  },
-  {
-    title: "Red Meats & Exotic Meats",
-    items: ["Lamb", "Beef, especially for skin conditions", "Pig head meat"],
-  },
-  {
-    title: "Certain Vegetables & Herbs",
-    items: [
-      "Taro",
-      "Chinese chives",
-      "Mustard greens",
-      "Bamboo shoots",
-      "Eggplant",
-    ],
-  },
-  {
-    title: "Tropical & Hot-Natured Fruits",
-    items: ["Apricots", "Durian", "Pineapple", "Mango", "Bayberry", "Lychee"],
-  },
-  {
-    title: "Alcohol",
-    items: ["Alcoholic drinks"],
-  },
-];
+
+  lifestyleCards: [
+    {
+      id: "lifestyle_rest",
+      title: "Rest & Lifestyle",
+      description:
+        "Balance work and rest, avoid overworking, keep warm after sweating, and avoid smoking.",
+      visible: true,
+    },
+    {
+      id: "lifestyle_emotional",
+      title: "Emotional Wellbeing",
+      description:
+        "Maintain a positive mood, stay calm and relaxed, and avoid anger and stress where possible.",
+      visible: true,
+    },
+  ],
+};
+
+const pageContent = ref(structuredClone(defaultPageContent));
+
+const mergeWithDefaultContent = (remoteData) => {
+  const remote = remoteData || {};
+
+  return {
+    hero: {
+      ...defaultPageContent.hero,
+      ...(remote.hero || {}),
+    },
+
+    beforeStart: {
+      ...defaultPageContent.beforeStart,
+      ...(remote.beforeStart || {}),
+    },
+
+    qnaItems: Array.isArray(remote.qnaItems)
+      ? remote.qnaItems
+          .filter((item) => item.visible !== false)
+          .map((item, index) => ({
+            id: item.id || `qna_${index}`,
+            question: item.question || "",
+            answer: Array.isArray(item.answer) ? item.answer : [],
+            visible: item.visible ?? true,
+          }))
+          .filter((item) => item.question.trim())
+      : defaultPageContent.qnaItems,
+
+    foodSection: {
+      ...defaultPageContent.foodSection,
+      ...(remote.foodSection || {}),
+    },
+
+    avoidGroups: Array.isArray(remote.avoidGroups)
+      ? remote.avoidGroups
+          .filter((group) => group.visible !== false)
+          .map((group, index) => ({
+            id: group.id || `avoid_${index}`,
+            title: group.title || "",
+            items: Array.isArray(group.items)
+              ? group.items.filter(Boolean)
+              : [],
+            visible: group.visible ?? true,
+          }))
+          .filter((group) => group.title.trim())
+      : defaultPageContent.avoidGroups,
+
+    lifestyleSection: {
+      ...defaultPageContent.lifestyleSection,
+      ...(remote.lifestyleSection || {}),
+    },
+
+    lifestyleCards: Array.isArray(remote.lifestyleCards)
+      ? remote.lifestyleCards
+          .filter((card) => card.visible !== false)
+          .map((card, index) => ({
+            id: card.id || `lifestyle_${index}`,
+            title: card.title || "",
+            description: card.description || "",
+            visible: card.visible ?? true,
+          }))
+          .filter((card) => card.title.trim())
+      : defaultPageContent.lifestyleCards,
+  };
+};
+
+const fetchQnaPageContent = async () => {
+  loading.value = true;
+  errorMessage.value = "";
+
+  try {
+    const docRef = doc(db, "siteContent", "qnaPage");
+    const docSnap = await getDoc(docRef);
+
+    if (!docSnap.exists()) {
+      pageContent.value = structuredClone(defaultPageContent);
+      return;
+    }
+
+    pageContent.value = mergeWithDefaultContent(docSnap.data());
+  } catch (error) {
+    console.error("Failed to load QNA page content:", error);
+    errorMessage.value =
+      "Failed to load QNA content. Showing default content for now.";
+    pageContent.value = structuredClone(defaultPageContent);
+  } finally {
+    loading.value = false;
+  }
+};
+
+const normaliseAnswerBlocks = (answer) => {
+  if (!Array.isArray(answer)) return [];
+
+  return answer
+    .map((block) => {
+      if (!block || !block.type) return null;
+
+      if (block.type === "paragraph") {
+        return {
+          type: "paragraph",
+          text: block.text || "",
+        };
+      }
+
+      if (block.type === "subheading") {
+        return {
+          type: "subheading",
+          text: block.text || "",
+        };
+      }
+
+      if (block.type === "list") {
+        return {
+          type: "list",
+          items: Array.isArray(block.items) ? block.items.filter(Boolean) : [],
+        };
+      }
+
+      return null;
+    })
+    .filter(Boolean);
+};
 
 const toggleItem = (index) => {
   openIndex.value = openIndex.value === index ? -1 : index;
@@ -528,6 +748,8 @@ const setSectionRef = (el) => {
 onMounted(async () => {
   window.scrollTo(0, 0);
   closeAllAnswers();
+
+  await fetchQnaPageContent();
   await nextTick();
 
   const observerOptions = {
@@ -701,6 +923,22 @@ onUnmounted(() => {
   font-size: 15px;
   line-height: 1.6;
   color: #64756a;
+}
+
+.qna-state-card {
+  padding: 40px 24px;
+  border-radius: 22px;
+  text-align: center;
+  color: #60776b;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px dashed rgba(50, 91, 73, 0.16);
+  font-size: 16px;
+}
+
+.qna-state-card.error {
+  color: #b55067;
+  background: rgba(255, 240, 242, 0.82);
+  border-color: rgba(181, 80, 103, 0.2);
 }
 
 .qna-list {
